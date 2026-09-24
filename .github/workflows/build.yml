@@ -29,7 +29,6 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -209,7 +208,10 @@ jobs:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
       - name: Run unit tests and build APKs
+        shell: bash
         run: |
+          set -euo pipefail
+
           gradle \
             --no-daemon \
             clean \
