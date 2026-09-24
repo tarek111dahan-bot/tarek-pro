@@ -1,16 +1,9 @@
-name: Build Tarek TV Pro 1.0.0
+name: Build Tarek TV Pro
 
 on:
   push:
-    branches:
-      - main
-      - master
-
+    branches: [main, master]
   pull_request:
-    branches:
-      - main
-      - master
-
   workflow_dispatch:
 
 permissions:
@@ -22,446 +15,238 @@ concurrency:
 
 jobs:
   build:
-    name: Build Android APK
     runs-on: ubuntu-latest
 
-    steps:
+    env:
+      GRADLE_VERSION: '8.9.2'
 
-      - name: Checkout repository
+    steps:
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v5
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
 
-      - name: Locate Tarek TV Pro source
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "Locating Tarek TV Pro source"
-          echo "========================================"
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Locate or extract project
+        shell: bash
+        run: |
+          set -euo pipefail
 
           if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
             echo "Android project found in repository root."
             exit 0
           fi
 
-          if [ -f "TarekTV-Pro-1.0.0-FRESH.zip" ]; then
-            echo "TarekTV-Pro-1.0.0-FRESH.zip found."
-            exit 0
+          ZIP=""
+
+          while IFS= read -r candidate; do
+            ZIP="$candidate"
+            break
+          done < <(
+            find . \
+              -maxdepth 2 \
+              -type f \
+              -iname '*.zip' \
+              -print |
+            sort
+          )
+
+          if [ -z "$ZIP" ]; then
+            echo "ERROR: No Android project and no ZIP archive were found."
+            find . -maxdepth 3 -type f -print | sort
+            exit 1
           fi
 
-          echo ""
-          echo "ERROR: Tarek TV Pro source was not found."
-          echo ""
-          echo "Repository contents:"
-          find . -maxdepth 4 -type f | sort
-
-          exit 1
-
-      - name: Extract Tarek TV Pro project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
-            echo "Project already exists in repository root."
-            exit 0
-          fi
-
-          echo "========================================"
-          echo "Extracting Tarek TV Pro project"
-          echo "========================================"
+          echo "Using ZIP:"
+          echo "$ZIP"
 
           rm -rf .project-extract
           mkdir -p .project-extract
 
-          unzip -q \
-            "TarekTV-Pro-1.0.0-FRESH.zip" \
-            -d .project-extract
-
-          echo ""
-          echo "ZIP contents:"
-          find .project-extract -maxdepth 6 -type f | sort
+          unzip -q "$ZIP" -d .project-extract
 
           PROJECT_ROOT=""
 
           if [ -f ".project-extract/settings.gradle.kts" ]; then
             PROJECT_ROOT=".project-extract"
-          fi
-
-          if [ -z "$PROJECT_ROOT" ] && \
-             [ -f ".project-extract/TarekTV-Pro/settings.gradle.kts" ]; then
-            PROJECT_ROOT=".project-extract/TarekTV-Pro"
-          fi
-
-          if [ -z "$PROJECT_ROOT" ]; then
-            PROJECT_ROOT=$(
+          else
+            PROJECT_ROOT="$(
               find .project-extract \
                 -type f \
-                -name "settings.gradle.kts" \
-                -print \
-                | head -n 1 \
-                | sed 's#/settings.gradle.kts$##'
-            )
+                -name settings.gradle.kts \
+                -print |
+              head -n 1 |
+              sed 's#/settings.gradle.kts$##'
+            )"
           fi
 
-          if [ -z "$PROJECT_ROOT" ]; then
-            echo ""
-            echo "ERROR: settings.gradle.kts was not found inside ZIP."
+          if [ -z "$PROJECT_ROOT" ] || \
+             [ ! -f "$PROJECT_ROOT/app/build.gradle.kts" ]; then
+
+            echo "ERROR: Could not detect a valid Android project inside ZIP."
+
+            find .project-extract \
+              -maxdepth 5 \
+              -type f \
+              -print |
+            sort
+
             exit 1
           fi
 
-          echo ""
           echo "Detected project root:"
           echo "$PROJECT_ROOT"
 
           cp -a "$PROJECT_ROOT/." .
 
-          echo ""
-          echo "Project copied to repository root."
+          rm -rf .project-extract
 
-      - name: Validate Android project structure
+      - name: Validate source tree
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "Validating Android project structure"
-          echo "========================================"
+          test -f settings.gradle.kts
+          test -f build.gradle.kts
+          test -f gradle.properties
+          test -f app/build.gradle.kts
+          test -f app/src/main/AndroidManifest.xml
 
-          REQUIRED_FILES=(
-            "settings.gradle.kts"
-            "build.gradle.kts"
-            "gradle.properties"
-            "app/build.gradle.kts"
-            "app/src/main/AndroidManifest.xml"
+          test -f \
+            app/src/main/java/com/tarektv/app/TarekTvApp.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/ui/MainActivity.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/ui/PlayerActivity.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/ui/IslamicActivity.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/data/parser/M3uParser.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/data/parser/EpgParser.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/data/remote/XtreamApi.kt
+
+          test -f \
+            app/src/main/java/com/tarektv/app/player/MediaPlaybackService.kt
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("app/src/main")
+
+          kt = list(root.rglob("*.kt"))
+
+          assert len(kt) >= 25, (
+              f"Expected multi-feature source tree, "
+              f"found {len(kt)} Kotlin files"
           )
 
-          for FILE in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$FILE" ]; then
-              echo ""
-              echo "ERROR: Missing required file:"
-              echo "$FILE"
-              exit 1
-            fi
+          for p in kt:
+              seen = set()
 
-            echo "OK: $FILE"
-          done
+              for n, line in enumerate(
+                  p.read_text(encoding="utf-8").splitlines(),
+                  1
+              ):
+                  if line.startswith("import ") and line in seen:
+                      raise SystemExit(
+                          f"Duplicate import: {p}:{n}: {line}"
+                      )
 
-          REQUIRED_DIRECTORIES=(
-            "app/src/main"
-            "app/src/main/java"
-            "app/src/main/res"
+                  seen.add(line)
+
+          manifest = (
+              root / "AndroidManifest.xml"
+          ).read_text(encoding="utf-8")
+
+          required = [
+              "android.intent.category.LEANBACK_LAUNCHER",
+              ".ui.PlayerActivity",
+              ".ui.IslamicActivity",
+              ".player.MediaPlaybackService",
+          ]
+
+          for token in required:
+              assert token in manifest, (
+                  f"Missing manifest feature: {token}"
+              )
+
+          print(
+              f"Source validation passed: "
+              f"{len(kt)} Kotlin files"
           )
+          PY
 
-          for DIRECTORY in "${REQUIRED_DIRECTORIES[@]}"; do
-            if [ ! -d "$DIRECTORY" ]; then
-              echo ""
-              echo "ERROR: Missing required directory:"
-              echo "$DIRECTORY"
-              exit 1
-            fi
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
 
-            echo "OK: $DIRECTORY"
-          done
+      - name: Run unit tests and build APKs
+        run: |
+          gradle \
+            --no-daemon \
+            clean \
+            testDebugUnitTest \
+            assembleDebug \
+            assembleRelease \
+            --stacktrace
 
-          echo ""
-          echo "Android project structure: PASSED"
-
-      - name: Install Gradle
+      - name: Verify APK outputs
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "========================================"
-          echo "Installing Gradle"
-          echo "========================================"
+          test -s \
+            app/build/outputs/apk/debug/app-debug.apk
 
-          sudo apt-get update
+          test -s \
+            app/build/outputs/apk/release/app-release-unsigned.apk
 
-          sudo apt-get install -y gradle
+          sha256sum \
+            app/build/outputs/apk/debug/app-debug.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            > app/build/outputs/SHA256SUMS.txt
 
-          echo ""
-          echo "Installed Gradle:"
-          gradle --version
-
-      - name: Generate Gradle Wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Generating Gradle Wrapper"
-          echo "========================================"
-
-          rm -rf gradle/wrapper
-
-          mkdir -p gradle/wrapper
-
-          gradle wrapper \
-            --gradle-version 8.13 \
-            --distribution-type bin
+          echo "APK verification passed."
 
           echo ""
-          echo "Checking generated Gradle Wrapper..."
+          echo "SHA-256:"
+          cat app/build/outputs/SHA256SUMS.txt
 
-          if [ ! -f "gradlew" ]; then
-            echo "ERROR: gradlew was not generated."
-            exit 1
-          fi
-
-          if [ ! -f "gradlew.bat" ]; then
-            echo "ERROR: gradlew.bat was not generated."
-            exit 1
-          fi
-
-          if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "ERROR: gradle-wrapper.properties was not generated."
-            exit 1
-          fi
-
-          if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "ERROR: gradle-wrapper.jar was not generated."
-            exit 1
-          fi
-
-          chmod +x gradlew
-
-          echo ""
-          echo "Gradle Wrapper:"
-          ls -lh gradlew
-          ls -lh gradlew.bat
-          ls -lh gradle/wrapper/
-
-          echo ""
-          echo "Gradle Wrapper generation: PASSED"
-
-      - name: Check Gradle Wrapper
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Checking Gradle Wrapper"
-          echo "========================================"
-
-          ./gradlew --version
-
-      - name: Validate Gradle project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Validating Gradle project"
-          echo "========================================"
-
-          ./gradlew tasks \
-            --stacktrace \
-            --no-daemon
-
-      - name: Clean project
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Cleaning project"
-          echo "========================================"
-
-          ./gradlew clean \
-            --stacktrace \
-            --no-daemon
-
-      - name: Build Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Building Debug APK"
-          echo "========================================"
-
-          ./gradlew assembleDebug \
-            --stacktrace \
-            --no-daemon
-
-      - name: Verify Debug APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Verifying Debug APK"
-          echo "========================================"
-
-          DEBUG_APK=$(
-            find app/build/outputs/apk/debug \
-              -type f \
-              -name "*.apk" \
-              -print \
-              | head -n 1
-          )
-
-          if [ -z "$DEBUG_APK" ]; then
-            echo ""
-            echo "ERROR: Debug APK was not generated."
-            exit 1
-          fi
-
-          echo ""
-          echo "Debug APK:"
-          ls -lh "$DEBUG_APK"
-
-          echo ""
-          echo "Debug APK verification: PASSED"
-
-      - name: Build Release APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Building Release APK"
-          echo "========================================"
-
-          ./gradlew assembleRelease \
-            --stacktrace \
-            --no-daemon
-
-      - name: Verify Release APK
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Verifying Release APK"
-          echo "========================================"
-
-          RELEASE_APK=$(
-            find app/build/outputs/apk/release \
-              -type f \
-              -name "*.apk" \
-              -print \
-              | head -n 1
-          )
-
-          if [ -z "$RELEASE_APK" ]; then
-            echo ""
-            echo "ERROR: Release APK was not generated."
-            exit 1
-          fi
-
-          echo ""
-          echo "Release APK:"
-          ls -lh "$RELEASE_APK"
-
-          echo ""
-          echo "Release APK verification: PASSED"
-
-      - name: Generate SHA-256
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Generating SHA-256 checksums"
-          echo "========================================"
-
-          mkdir -p build-artifacts
-
-          DEBUG_APK=$(
-            find app/build/outputs/apk/debug \
-              -type f \
-              -name "*.apk" \
-              -print \
-              | head -n 1
-          )
-
-          RELEASE_APK=$(
-            find app/build/outputs/apk/release \
-              -type f \
-              -name "*.apk" \
-              -print \
-              | head -n 1
-          )
-
-          sha256sum "$DEBUG_APK" \
-            > build-artifacts/debug-sha256.txt
-
-          sha256sum "$RELEASE_APK" \
-            > build-artifacts/release-sha256.txt
-
-          echo ""
-          echo "Debug SHA-256:"
-          cat build-artifacts/debug-sha256.txt
-
-          echo ""
-          echo "Release SHA-256:"
-          cat build-artifacts/release-sha256.txt
-
-      - name: Collect APK artifacts
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "========================================"
-          echo "Collecting APK artifacts"
-          echo "========================================"
-
-          rm -rf build-artifacts/debug
-          rm -rf build-artifacts/release
-
-          mkdir -p build-artifacts/debug
-          mkdir -p build-artifacts/release
-
-          cp app/build/outputs/apk/debug/*.apk \
-            build-artifacts/debug/
-
-          cp app/build/outputs/apk/release/*.apk \
-            build-artifacts/release/
-
-          echo ""
-          echo "Collected artifacts:"
-          find build-artifacts -type f -maxdepth 3 -print
-
-      - name: Upload Debug APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: TarekTV-Pro-1.0.0-debug
+          name: tarek-tv-pro-2.0.1-apks
           path: |
-            build-artifacts/debug/*.apk
-            build-artifacts/debug-sha256.txt
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release-unsigned.apk
+            app/build/outputs/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: TarekTV-Pro-1.0.0-release
-          path: |
-            build-artifacts/release/*.apk
-            build-artifacts/release-sha256.txt
-          if-no-files-found: error
-          retention-days: 30
-
-      - name: Build completed
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo ""
-          echo "========================================"
-          echo "TAREK TV PRO 1.0.0 BUILD COMPLETED"
-          echo "========================================"
-          echo ""
-          echo "Debug APK: PASSED"
-          echo "Release APK: PASSED"
-          echo "SHA-256: PASSED"
-          echo "Artifacts: PASSED"
-          echo ""
