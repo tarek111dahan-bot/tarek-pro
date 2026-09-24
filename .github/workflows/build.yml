@@ -1,4 +1,4 @@
-name: Build Tarek TV Pro
+name: Build Tarek TV Pro 1.0.0
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tarek-tv-pro-build-${{ github.ref }}
+  group: tarek-tv-pro-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,110 +35,132 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Check source ZIP
+      - name: Check source
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking source ZIP..."
+          if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
+            echo "Android project found in repository root."
+          elif [ -f "TarekTV-Pro.zip" ]; then
+            echo "TarekTV-Pro.zip found."
+          else
+            echo "ERROR: Android project or TarekTV-Pro.zip not found."
+            exit 1
+          fi
 
-          test -f TarekTV-Pro.zip
-
-          echo "Source ZIP found:"
-          ls -lh TarekTV-Pro.zip
-
-      - name: Extract Android project
+      - name: Extract project ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Extracting TarekTV-Pro.zip..."
+          if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
+            echo "Project already exists in repository root."
+            exit 0
+          fi
 
           rm -rf .project-extract
           mkdir -p .project-extract
 
+          echo "Extracting TarekTV-Pro.zip..."
+
           unzip -q TarekTV-Pro.zip -d .project-extract
 
-          echo "Extracted structure:"
-          find .project-extract -maxdepth 3 -type f | sort | head -n 100
+          PROJECT_ROOT=""
 
-          PROJECT_DIR=".project-extract/TarekTV-Pro"
+          if [ -f ".project-extract/settings.gradle.kts" ]; then
+            PROJECT_ROOT=".project-extract"
+          elif [ -f ".project-extract/TarekTV-Pro/settings.gradle.kts" ]; then
+            PROJECT_ROOT=".project-extract/TarekTV-Pro"
+          else
+            PROJECT_ROOT=$(find .project-extract \
+              -type f \
+              -name "settings.gradle.kts" \
+              -print \
+              | head -n 1 \
+              | sed 's#/settings.gradle.kts$##')
+          fi
 
-          if [ ! -d "$PROJECT_DIR" ]; then
-            echo "ERROR: Expected TarekTV-Pro directory was not found."
-            echo "Actual extracted directories:"
-            find .project-extract -maxdepth 2 -type d | sort
+          if [ -z "$PROJECT_ROOT" ]; then
+            echo "ERROR: settings.gradle.kts not found."
             exit 1
           fi
 
-          echo "Copying Android project to repository root..."
+          echo "Project root:"
+          echo "$PROJECT_ROOT"
 
-          cp -a "$PROJECT_DIR/." .
+          cp -a "$PROJECT_ROOT/." .
 
-          echo "Android project extracted successfully."
+          echo "Project extracted successfully."
 
       - name: Validate Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Validating Android project structure..."
+          echo "Validating project..."
 
           test -f settings.gradle.kts
           test -f build.gradle.kts
-          test -f gradlew
-          test -f gradle/wrapper/gradle-wrapper.properties
           test -f app/build.gradle.kts
           test -f app/src/main/AndroidManifest.xml
 
-          chmod +x gradlew
-
-          echo ""
-          echo "Required Android project files:"
-          echo "  settings.gradle.kts       OK"
-          echo "  build.gradle.kts          OK"
-          echo "  gradlew                   OK"
-          echo "  Gradle wrapper            OK"
-          echo "  app/build.gradle.kts      OK"
-          echo "  AndroidManifest.xml       OK"
-          echo ""
+          test -d app/src/main/java
+          test -d app/src/main/res
 
           echo "Android project structure: OK"
 
-      - name: Inspect project
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Prepare Gradle Wrapper
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Project root:"
-          pwd
+          if [ ! -f "gradlew" ] || \
+             [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
 
-          echo ""
-          echo "Root files:"
-          find . -maxdepth 2 -type f \
-            ! -path "./.git/*" \
-            ! -path "./.project-extract/*" \
-            | sort | head -n 150
+            echo "Gradle Wrapper missing."
+            echo "Creating Gradle Wrapper 9.6.0..."
 
-          echo ""
-          echo "Gradle wrapper properties:"
-          cat gradle/wrapper/gradle-wrapper.properties
+            gradle wrapper \
+              --gradle-version 9.6.0 \
+              --distribution-type bin
+          else
+            echo "Gradle Wrapper already exists."
+          fi
 
-      - name: Check Gradle wrapper
+          chmod +x gradlew
+
+          test -f gradlew
+          test -f gradle/wrapper/gradle-wrapper.properties
+          test -f gradle/wrapper/gradle-wrapper.jar
+
+          echo "Gradle Wrapper: OK"
+
+      - name: Check Gradle
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Checking Gradle wrapper..."
 
           ./gradlew --version
 
-      - name: Clean project
+      - name: Validate Gradle project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Cleaning project..."
+          ./gradlew tasks \
+            --stacktrace \
+            --no-daemon
+
+      - name: Clean
+        shell: bash
+        run: |
+          set -euo pipefail
 
           ./gradlew clean \
             --stacktrace \
@@ -149,8 +171,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Building Debug APK..."
-
           ./gradlew assembleDebug \
             --stacktrace \
             --no-daemon
@@ -160,58 +180,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Building Release APK..."
-
           ./gradlew assembleRelease \
             --stacktrace \
             --no-daemon
 
-      - name: Verify APK files
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Verifying generated APK files..."
-
-          DEBUG_DIR="app/build/outputs/apk/debug"
-          RELEASE_DIR="app/build/outputs/apk/release"
-
-          test -d "$DEBUG_DIR"
-          test -d "$RELEASE_DIR"
-
-          DEBUG_APK=$(find "$DEBUG_DIR" \
+          DEBUG_APK=$(find app/build/outputs/apk/debug \
             -type f \
             -name "*.apk" \
-            | head -n 1)
+            | head -n 1 || true)
 
-          RELEASE_APK=$(find "$RELEASE_DIR" \
+          RELEASE_APK=$(find app/build/outputs/apk/release \
             -type f \
             -name "*.apk" \
-            | head -n 1)
+            | head -n 1 || true)
 
           if [ -z "$DEBUG_APK" ]; then
             echo "ERROR: Debug APK was not generated."
-            find app/build/outputs -type f | sort || true
             exit 1
           fi
 
           if [ -z "$RELEASE_APK" ]; then
             echo "ERROR: Release APK was not generated."
-            find app/build/outputs -type f | sort || true
             exit 1
           fi
 
-          echo ""
           echo "Debug APK:"
           ls -lh "$DEBUG_APK"
-          echo "$DEBUG_APK"
 
-          echo ""
           echo "Release APK:"
           ls -lh "$RELEASE_APK"
-          echo "$RELEASE_APK"
 
-          echo ""
           echo "APK verification: OK"
 
       - name: Generate SHA-256
@@ -233,20 +236,13 @@ jobs:
             -exec sha256sum {} \; \
             > build-artifacts/release-sha256.txt
 
-          echo "Debug SHA-256:"
           cat build-artifacts/debug-sha256.txt
-
-          echo ""
-          echo "Release SHA-256:"
           cat build-artifacts/release-sha256.txt
 
-      - name: Collect APK artifacts
+      - name: Collect APK
         shell: bash
         run: |
           set -euo pipefail
-
-          rm -rf build-artifacts/debug
-          rm -rf build-artifacts/release
 
           mkdir -p build-artifacts/debug
           mkdir -p build-artifacts/release
@@ -257,17 +253,10 @@ jobs:
           cp app/build/outputs/apk/release/*.apk \
             build-artifacts/release/
 
-          echo "Collected Debug APK:"
-          ls -lh build-artifacts/debug/
-
-          echo ""
-          echo "Collected Release APK:"
-          ls -lh build-artifacts/release/
-
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: TarekTV-Pro-debug
+          name: TarekTV-Pro-1.0.0-debug
           path: |
             build-artifacts/debug/*.apk
             build-artifacts/debug-sha256.txt
@@ -277,7 +266,7 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: TarekTV-Pro-release
+          name: TarekTV-Pro-1.0.0-release
           path: |
             build-artifacts/release/*.apk
             build-artifacts/release-sha256.txt
