@@ -2,7 +2,9 @@ name: Build Tarek TV Pro
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   pull_request:
   workflow_dispatch:
 
@@ -18,37 +20,26 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      GRADLE_VERSION: '8.9.2'
+      ANDROID_API: "35"
+      BUILD_TOOLS: "35.0.0"
+      GRADLE_VERSION: "8.9.2"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK packages
+      - name: Locate or extract Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-          yes | sdkmanager --licenses >/dev/null || true
-
-      - name: Locate or extract project
-        shell: bash
-        run: |
-          set -euo pipefail
+          echo "Checking repository..."
 
           if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
             echo "Android project found in repository root."
@@ -64,18 +55,20 @@ jobs:
             find . \
               -maxdepth 2 \
               -type f \
-              -iname '*.zip' \
+              -iname "*.zip" \
               -print |
             sort
           )
 
           if [ -z "$ZIP" ]; then
             echo "ERROR: No Android project and no ZIP archive were found."
-            find . -maxdepth 3 -type f -print | sort
+            echo ""
+            echo "Repository files:"
+            find . -maxdepth 4 -type f -print | sort
             exit 1
           fi
 
-          echo "Using ZIP:"
+          echo "Using ZIP archive:"
           echo "$ZIP"
 
           rm -rf .project-extract
@@ -85,26 +78,31 @@ jobs:
 
           PROJECT_ROOT=""
 
-          if [ -f ".project-extract/settings.gradle.kts" ]; then
+          if [ -f ".project-extract/settings.gradle.kts" ] && \
+             [ -f ".project-extract/app/build.gradle.kts" ]; then
             PROJECT_ROOT=".project-extract"
           else
             PROJECT_ROOT="$(
               find .project-extract \
                 -type f \
-                -name settings.gradle.kts \
+                -name "settings.gradle.kts" \
                 -print |
-              head -n 1 |
-              sed 's#/settings.gradle.kts$##'
+              while IFS= read -r settings_file; do
+                candidate="${settings_file%/settings.gradle.kts}"
+
+                if [ -f "$candidate/app/build.gradle.kts" ]; then
+                  echo "$candidate"
+                  break
+                fi
+              done
             )"
           fi
 
-          if [ -z "$PROJECT_ROOT" ] || \
-             [ ! -f "$PROJECT_ROOT/app/build.gradle.kts" ]; then
-
+          if [ -z "$PROJECT_ROOT" ]; then
             echo "ERROR: Could not detect a valid Android project inside ZIP."
 
             find .project-extract \
-              -maxdepth 5 \
+              -maxdepth 6 \
               -type f \
               -print |
             sort
@@ -112,94 +110,226 @@ jobs:
             exit 1
           fi
 
-          echo "Detected project root:"
+          echo "Detected Android project root:"
           echo "$PROJECT_ROOT"
 
           cp -a "$PROJECT_ROOT/." .
 
           rm -rf .project-extract
 
-      - name: Validate source tree
+          echo ""
+          echo "Final project root:"
+          pwd
+
+          echo ""
+          echo "Top-level files:"
+          find . -maxdepth 2 -type f -print | sort
+
+      - name: Configure Android SDK
         shell: bash
         run: |
           set -euo pipefail
 
-          test -f settings.gradle.kts
-          test -f build.gradle.kts
-          test -f gradle.properties
-          test -f app/build.gradle.kts
-          test -f app/src/main/AndroidManifest.xml
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-          test -f \
-            app/src/main/java/com/tarektv/app/TarekTvApp.kt
+          if [ -z "$SDK_ROOT" ]; then
+            SDK_ROOT="/usr/local/lib/android/sdk"
+          fi
 
-          test -f \
-            app/src/main/java/com/tarektv/app/ui/MainActivity.kt
+          if [ ! -d "$SDK_ROOT" ]; then
+            echo "ERROR: Android SDK directory not found:"
+            echo "$SDK_ROOT"
+            exit 1
+          fi
 
-          test -f \
-            app/src/main/java/com/tarektv/app/ui/PlayerActivity.kt
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
 
-          test -f \
-            app/src/main/java/com/tarektv/app/ui/IslamicActivity.kt
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/cmdline-tools/bin" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          echo "$SDK_ROOT/emulator" >> "$GITHUB_PATH"
 
-          test -f \
-            app/src/main/java/com/tarektv/app/data/parser/M3uParser.kt
+          SDKMANAGER=""
 
-          test -f \
-            app/src/main/java/com/tarektv/app/data/parser/EpgParser.kt
+          if [ -x "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          elif [ -x "$SDK_ROOT/cmdline-tools/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK_ROOT/cmdline-tools/bin/sdkmanager"
+          elif command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER="$(command -v sdkmanager)"
+          fi
 
-          test -f \
-            app/src/main/java/com/tarektv/app/data/remote/XtreamApi.kt
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager was not found."
+            echo ""
+            echo "SDK directory contents:"
+            find "$SDK_ROOT" -maxdepth 4 -type f -name sdkmanager -print || true
+            exit 1
+          fi
 
-          test -f \
-            app/src/main/java/com/tarektv/app/player/MediaPlaybackService.kt
+          echo "Using sdkmanager:"
+          echo "$SDKMANAGER"
+
+          echo "sdkmanager version:"
+          "$SDKMANAGER" --version
+
+          echo "Accepting Android SDK licenses..."
+          yes | "$SDKMANAGER" \
+            --sdk_root="$SDK_ROOT" \
+            --licenses >/dev/null || true
+
+          echo "Installing required Android SDK packages..."
+
+          "$SDKMANAGER" \
+            --sdk_root="$SDK_ROOT" \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;${BUILD_TOOLS}"
+
+          echo ""
+          echo "Installed Android SDK packages:"
+          "$SDKMANAGER" \
+            --sdk_root="$SDK_ROOT" \
+            --list_installed |
+          grep -E \
+            "platform-tools|platforms;android-|build-tools;" \
+            || true
+
+      - name: Validate project structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Validating Android project..."
+
+          test -f "settings.gradle.kts"
+          test -f "build.gradle.kts"
+          test -f "gradle.properties"
+          test -f "app/build.gradle.kts"
+          test -f "app/src/main/AndroidManifest.xml"
+
+          echo "Required root files found."
+
+          REQUIRED_FILES=(
+            "app/src/main/java/com/tarektv/app/TarekTvApp.kt"
+            "app/src/main/java/com/tarektv/app/ui/MainActivity.kt"
+            "app/src/main/java/com/tarektv/app/ui/PlayerActivity.kt"
+            "app/src/main/java/com/tarektv/app/ui/IslamicActivity.kt"
+            "app/src/main/java/com/tarektv/app/data/parser/M3uParser.kt"
+            "app/src/main/java/com/tarektv/app/data/parser/EpgParser.kt"
+            "app/src/main/java/com/tarektv/app/data/remote/XtreamApi.kt"
+            "app/src/main/java/com/tarektv/app/player/MediaPlaybackService.kt"
+          )
+
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [ ! -f "$file" ]; then
+              echo "ERROR: Missing required file:"
+              echo "$file"
+              exit 1
+            fi
+          done
+
+          echo "Required source files found."
 
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           root = Path("app/src/main")
 
-          kt = list(root.rglob("*.kt"))
+          kotlin_files = sorted(root.rglob("*.kt"))
+          xml_files = sorted(root.rglob("*.xml"))
 
-          assert len(kt) >= 25, (
-              f"Expected multi-feature source tree, "
-              f"found {len(kt)} Kotlin files"
-          )
+          print(f"Kotlin files: {len(kotlin_files)}")
+          print(f"XML files: {len(xml_files)}")
 
-          for p in kt:
-              seen = set()
+          if len(kotlin_files) < 25:
+              raise SystemExit(
+                  f"ERROR: Expected at least 25 Kotlin files, "
+                  f"found {len(kotlin_files)}"
+              )
 
-              for n, line in enumerate(
-                  p.read_text(encoding="utf-8").splitlines(),
-                  1
-              ):
-                  if line.startswith("import ") and line in seen:
-                      raise SystemExit(
-                          f"Duplicate import: {p}:{n}: {line}"
-                      )
+          manifest_path = root / "AndroidManifest.xml"
+          manifest = manifest_path.read_text(encoding="utf-8")
 
-                  seen.add(line)
-
-          manifest = (
-              root / "AndroidManifest.xml"
-          ).read_text(encoding="utf-8")
-
-          required = [
+          required_manifest_tokens = [
               "android.intent.category.LEANBACK_LAUNCHER",
+              ".ui.MainActivity",
               ".ui.PlayerActivity",
               ".ui.IslamicActivity",
               ".player.MediaPlaybackService",
           ]
 
-          for token in required:
-              assert token in manifest, (
-                  f"Missing manifest feature: {token}"
+          for token in required_manifest_tokens:
+              if token not in manifest:
+                  raise SystemExit(
+                      f"ERROR: Missing manifest token: {token}"
+                  )
+
+          print("Manifest validation passed.")
+
+          duplicate_imports = []
+
+          for path in kotlin_files:
+              seen = set()
+
+              for line_number, line in enumerate(
+                  path.read_text(encoding="utf-8").splitlines(),
+                  start=1,
+              ):
+                  stripped = line.strip()
+
+                  if stripped.startswith("import "):
+                      if stripped in seen:
+                          duplicate_imports.append(
+                              f"{path}:{line_number}: {stripped}"
+                          )
+                      seen.add(stripped)
+
+          if duplicate_imports:
+              print("Duplicate imports detected:")
+
+              for item in duplicate_imports:
+                  print(item)
+
+              raise SystemExit(
+                  "ERROR: Duplicate imports found."
               )
 
-          print(
-              f"Source validation passed: "
-              f"{len(kt)} Kotlin files"
+          print("Kotlin import validation passed.")
+
+          build_file = Path("app/build.gradle.kts").read_text(
+              encoding="utf-8"
           )
+
+          for pattern, description in [
+              (r"compileSdk\s*=\s*35", "compileSdk 35"),
+              (r"minSdk\s*=\s*23", "minSdk 23"),
+              (r"targetSdk\s*=\s*35", "targetSdk 35"),
+          ]:
+              if not re.search(pattern, build_file):
+                  raise SystemExit(
+                      f"ERROR: Missing expected build setting: {description}"
+                  )
+
+          print("Android SDK configuration validation passed.")
+
+          main_activity = (
+              root /
+              "java/com/tarektv/app/ui/MainActivity.kt"
+          )
+
+          main_text = main_activity.read_text(encoding="utf-8")
+
+          if "class MainActivity" not in main_text:
+              raise SystemExit(
+                  "ERROR: MainActivity class was not found."
+              )
+
+          print("MainActivity validation passed.")
+
+          print("Source tree validation completed successfully.")
           PY
 
       - name: Set up Gradle
@@ -207,16 +337,48 @@ jobs:
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
 
-      - name: Run unit tests and build APKs
+      - name: Verify Gradle project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Gradle version:"
+          gradle --version
+
+          echo ""
+          echo "Gradle project tasks:"
+          gradle \
+            --no-daemon \
+            tasks \
+            --stacktrace
+
+      - name: Run unit tests
         shell: bash
         run: |
           set -euo pipefail
 
           gradle \
             --no-daemon \
-            clean \
             testDebugUnitTest \
+            --stacktrace
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle \
+            --no-daemon \
             assembleDebug \
+            --stacktrace
+
+      - name: Build Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle \
+            --no-daemon \
             assembleRelease \
             --stacktrace
 
@@ -225,24 +387,39 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -s \
-            app/build/outputs/apk/debug/app-debug.apk
+          DEBUG_APK="app/build/outputs/apk/debug/app-debug.apk"
+          RELEASE_APK="app/build/outputs/apk/release/app-release-unsigned.apk"
 
-          test -s \
-            app/build/outputs/apk/release/app-release-unsigned.apk
+          if [ ! -s "$DEBUG_APK" ]; then
+            echo "ERROR: Debug APK was not created."
+            find app/build/outputs -type f -print | sort || true
+            exit 1
+          fi
 
-          sha256sum \
-            app/build/outputs/apk/debug/app-debug.apk \
-            app/build/outputs/apk/release/app-release-unsigned.apk \
-            > app/build/outputs/SHA256SUMS.txt
+          if [ ! -s "$RELEASE_APK" ]; then
+            echo "ERROR: Release APK was not created."
+            find app/build/outputs -type f -print | sort || true
+            exit 1
+          fi
 
-          echo "APK verification passed."
+          echo "Debug APK:"
+          ls -lh "$DEBUG_APK"
 
           echo ""
-          echo "SHA-256:"
+          echo "Release APK:"
+          ls -lh "$RELEASE_APK"
+
+          echo ""
+          echo "APK SHA-256:"
+
+          sha256sum \
+            "$DEBUG_APK" \
+            "$RELEASE_APK" \
+            > app/build/outputs/SHA256SUMS.txt
+
           cat app/build/outputs/SHA256SUMS.txt
 
-      - name: Upload APKs
+      - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tarek-tv-pro-2.0.1-apks
