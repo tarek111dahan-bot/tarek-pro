@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -40,22 +41,25 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Checking repository..."
+          echo "========================================"
+          echo "Locating Tarek TV Pro source"
+          echo "========================================"
 
           if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
-            echo "Android project already exists in repository root."
+            echo "Android project found in repository root."
             exit 0
           fi
 
           if [ -f "TarekTV-Pro-1.0.0-FRESH.zip" ]; then
-            echo "Fresh Tarek TV Pro ZIP found."
+            echo "TarekTV-Pro-1.0.0-FRESH.zip found."
             exit 0
           fi
 
+          echo ""
           echo "ERROR: Tarek TV Pro source was not found."
           echo ""
           echo "Repository contents:"
-          find . -maxdepth 3 -type f | sort
+          find . -maxdepth 4 -type f | sort
 
           exit 1
 
@@ -69,17 +73,20 @@ jobs:
             exit 0
           fi
 
-          echo "Extracting TarekTV-Pro-1.0.0-FRESH.zip..."
+          echo "========================================"
+          echo "Extracting Tarek TV Pro project"
+          echo "========================================"
 
           rm -rf .project-extract
           mkdir -p .project-extract
 
-          unzip -q "TarekTV-Pro-1.0.0-FRESH.zip" \
+          unzip -q \
+            "TarekTV-Pro-1.0.0-FRESH.zip" \
             -d .project-extract
 
           echo ""
-          echo "Extracted files:"
-          find .project-extract -maxdepth 5 -type f | sort
+          echo "ZIP contents:"
+          find .project-extract -maxdepth 6 -type f | sort
 
           PROJECT_ROOT=""
 
@@ -105,12 +112,12 @@ jobs:
 
           if [ -z "$PROJECT_ROOT" ]; then
             echo ""
-            echo "ERROR: settings.gradle.kts was not found inside the ZIP."
+            echo "ERROR: settings.gradle.kts was not found inside ZIP."
             exit 1
           fi
 
           echo ""
-          echo "Detected Android project root:"
+          echo "Detected project root:"
           echo "$PROJECT_ROOT"
 
           cp -a "$PROJECT_ROOT/." .
@@ -123,7 +130,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Validating Android project..."
+          echo "========================================"
+          echo "Validating Android project structure"
+          echo "========================================"
 
           REQUIRED_FILES=(
             "settings.gradle.kts"
@@ -135,6 +144,7 @@ jobs:
 
           for FILE in "${REQUIRED_FILES[@]}"; do
             if [ ! -f "$FILE" ]; then
+              echo ""
               echo "ERROR: Missing required file:"
               echo "$FILE"
               exit 1
@@ -144,12 +154,14 @@ jobs:
           done
 
           REQUIRED_DIRECTORIES=(
+            "app/src/main"
             "app/src/main/java"
             "app/src/main/res"
           )
 
           for DIRECTORY in "${REQUIRED_DIRECTORIES[@]}"; do
             if [ ! -d "$DIRECTORY" ]; then
+              echo ""
               echo "ERROR: Missing required directory:"
               echo "$DIRECTORY"
               exit 1
@@ -159,64 +171,85 @@ jobs:
           done
 
           echo ""
-          echo "Android project structure validation: PASSED"
+          echo "Android project structure: PASSED"
 
-      - name: Prepare Gradle Wrapper
+      - name: Install Gradle
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking Gradle Wrapper..."
+          echo "========================================"
+          echo "Installing Gradle"
+          echo "========================================"
 
-          if [ ! -f "gradlew" ] || \
-             [ ! -f "gradlew.bat" ] || \
-             [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
+          sudo apt-get update
 
-            echo "Gradle Wrapper is missing."
+          sudo apt-get install -y gradle
 
-            echo "Installing Gradle 8.13..."
+          echo ""
+          echo "Installed Gradle:"
+          gradle --version
 
-            sudo apt-get update
-            sudo apt-get install -y gradle
+      - name: Generate Gradle Wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
 
-            echo "Generating Gradle Wrapper..."
+          echo "========================================"
+          echo "Generating Gradle Wrapper"
+          echo "========================================"
 
-            gradle wrapper \
-              --gradle-version 8.13 \
-              --distribution-type bin
-          fi
+          rm -rf gradle/wrapper
 
-          chmod +x gradlew
+          mkdir -p gradle/wrapper
+
+          gradle wrapper \
+            --gradle-version 8.13 \
+            --distribution-type bin
+
+          echo ""
+          echo "Checking generated Gradle Wrapper..."
 
           if [ ! -f "gradlew" ]; then
-            echo "ERROR: gradlew was not created."
+            echo "ERROR: gradlew was not generated."
             exit 1
           fi
 
           if [ ! -f "gradlew.bat" ]; then
-            echo "ERROR: gradlew.bat was not created."
+            echo "ERROR: gradlew.bat was not generated."
             exit 1
           fi
 
           if [ ! -f "gradle/wrapper/gradle-wrapper.properties" ]; then
-            echo "ERROR: gradle-wrapper.properties was not created."
+            echo "ERROR: gradle-wrapper.properties was not generated."
             exit 1
           fi
 
           if [ ! -f "gradle/wrapper/gradle-wrapper.jar" ]; then
-            echo "ERROR: gradle-wrapper.jar was not created."
+            echo "ERROR: gradle-wrapper.jar was not generated."
             exit 1
           fi
 
-          echo ""
-          echo "Gradle Wrapper: PASSED"
+          chmod +x gradlew
 
-      - name: Check Gradle
+          echo ""
+          echo "Gradle Wrapper:"
+          ls -lh gradlew
+          ls -lh gradlew.bat
+          ls -lh gradle/wrapper/
+
+          echo ""
+          echo "Gradle Wrapper generation: PASSED"
+
+      - name: Check Gradle Wrapper
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Gradle version:"
+          echo "========================================"
+          echo "Checking Gradle Wrapper"
+          echo "========================================"
+
           ./gradlew --version
 
       - name: Validate Gradle project
@@ -224,7 +257,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Running Gradle task validation..."
+          echo "========================================"
+          echo "Validating Gradle project"
+          echo "========================================"
 
           ./gradlew tasks \
             --stacktrace \
@@ -235,7 +270,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Cleaning project..."
+          echo "========================================"
+          echo "Cleaning project"
+          echo "========================================"
 
           ./gradlew clean \
             --stacktrace \
@@ -246,49 +283,34 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Building Debug APK..."
+          echo "========================================"
+          echo "Building Debug APK"
+          echo "========================================"
 
           ./gradlew assembleDebug \
             --stacktrace \
             --no-daemon
 
-      - name: Build Release APK
+      - name: Verify Debug APK
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Building Release APK..."
+          echo "========================================"
+          echo "Verifying Debug APK"
+          echo "========================================"
 
-          ./gradlew assembleRelease \
-            --stacktrace \
-            --no-daemon
-
-      - name: Verify generated APKs
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Searching for generated APKs..."
-
-          DEBUG_APK=$(find \
-            app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            | head -n 1 || true)
-
-          RELEASE_APK=$(find \
-            app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" \
-            | head -n 1 || true)
+          DEBUG_APK=$(
+            find app/build/outputs/apk/debug \
+              -type f \
+              -name "*.apk" \
+              -print \
+              | head -n 1
+          )
 
           if [ -z "$DEBUG_APK" ]; then
+            echo ""
             echo "ERROR: Debug APK was not generated."
-            exit 1
-          fi
-
-          if [ -z "$RELEASE_APK" ]; then
-            echo "ERROR: Release APK was not generated."
             exit 1
           fi
 
@@ -297,30 +319,77 @@ jobs:
           ls -lh "$DEBUG_APK"
 
           echo ""
+          echo "Debug APK verification: PASSED"
+
+      - name: Build Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Building Release APK"
+          echo "========================================"
+
+          ./gradlew assembleRelease \
+            --stacktrace \
+            --no-daemon
+
+      - name: Verify Release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "Verifying Release APK"
+          echo "========================================"
+
+          RELEASE_APK=$(
+            find app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print \
+              | head -n 1
+          )
+
+          if [ -z "$RELEASE_APK" ]; then
+            echo ""
+            echo "ERROR: Release APK was not generated."
+            exit 1
+          fi
+
+          echo ""
           echo "Release APK:"
           ls -lh "$RELEASE_APK"
 
           echo ""
-          echo "APK verification: PASSED"
+          echo "Release APK verification: PASSED"
 
       - name: Generate SHA-256
         shell: bash
         run: |
           set -euo pipefail
 
+          echo "========================================"
+          echo "Generating SHA-256 checksums"
+          echo "========================================"
+
           mkdir -p build-artifacts
 
-          DEBUG_APK=$(find \
-            app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)
+          DEBUG_APK=$(
+            find app/build/outputs/apk/debug \
+              -type f \
+              -name "*.apk" \
+              -print \
+              | head -n 1
+          )
 
-          RELEASE_APK=$(find \
-            app/build/outputs/apk/release \
-            -type f \
-            -name "*.apk" \
-            | head -n 1)
+          RELEASE_APK=$(
+            find app/build/outputs/apk/release \
+              -type f \
+              -name "*.apk" \
+              -print \
+              | head -n 1
+          )
 
           sha256sum "$DEBUG_APK" \
             > build-artifacts/debug-sha256.txt
@@ -341,6 +410,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "========================================"
+          echo "Collecting APK artifacts"
+          echo "========================================"
+
           rm -rf build-artifacts/debug
           rm -rf build-artifacts/release
 
@@ -353,7 +426,9 @@ jobs:
           cp app/build/outputs/apk/release/*.apk \
             build-artifacts/release/
 
-          echo "APK artifacts collected."
+          echo ""
+          echo "Collected artifacts:"
+          find build-artifacts -type f -maxdepth 3 -print
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -374,3 +449,19 @@ jobs:
             build-artifacts/release-sha256.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Build completed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo ""
+          echo "========================================"
+          echo "TAREK TV PRO 1.0.0 BUILD COMPLETED"
+          echo "========================================"
+          echo ""
+          echo "Debug APK: PASSED"
+          echo "Release APK: PASSED"
+          echo "SHA-256: PASSED"
+          echo "Artifacts: PASSED"
+          echo ""
