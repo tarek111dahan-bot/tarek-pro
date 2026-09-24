@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: tarek-tv-build-${{ github.ref }}
+  group: tarek-tv-pro-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,12 +35,54 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Check source ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Checking source ZIP..."
+
+          test -f TarekTV-Pro.zip
+
+          echo "Source ZIP found:"
+          ls -lh TarekTV-Pro.zip
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Extracting TarekTV-Pro.zip..."
+
+          rm -rf .project-extract
+          mkdir -p .project-extract
+
+          unzip -q TarekTV-Pro.zip -d .project-extract
+
+          echo "Extracted structure:"
+          find .project-extract -maxdepth 3 -type f | sort | head -n 100
+
+          PROJECT_DIR=".project-extract/TarekTV-Pro"
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "ERROR: Expected TarekTV-Pro directory was not found."
+            echo "Actual extracted directories:"
+            find .project-extract -maxdepth 2 -type d | sort
+            exit 1
+          fi
+
+          echo "Copying Android project to repository root..."
+
+          cp -a "$PROJECT_DIR/." .
+
+          echo "Android project extracted successfully."
+
       - name: Validate Android project
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking Android project structure..."
+          echo "Validating Android project structure..."
 
           test -f settings.gradle.kts
           test -f build.gradle.kts
@@ -51,7 +93,36 @@ jobs:
 
           chmod +x gradlew
 
+          echo ""
+          echo "Required Android project files:"
+          echo "  settings.gradle.kts       OK"
+          echo "  build.gradle.kts          OK"
+          echo "  gradlew                   OK"
+          echo "  Gradle wrapper            OK"
+          echo "  app/build.gradle.kts      OK"
+          echo "  AndroidManifest.xml       OK"
+          echo ""
+
           echo "Android project structure: OK"
+
+      - name: Inspect project
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Project root:"
+          pwd
+
+          echo ""
+          echo "Root files:"
+          find . -maxdepth 2 -type f \
+            ! -path "./.git/*" \
+            ! -path "./.project-extract/*" \
+            | sort | head -n 150
+
+          echo ""
+          echo "Gradle wrapper properties:"
+          cat gradle/wrapper/gradle-wrapper.properties
 
       - name: Check Gradle wrapper
         shell: bash
@@ -59,6 +130,7 @@ jobs:
           set -euo pipefail
 
           echo "Checking Gradle wrapper..."
+
           ./gradlew --version
 
       - name: Clean project
@@ -67,7 +139,10 @@ jobs:
           set -euo pipefail
 
           echo "Cleaning project..."
-          ./gradlew clean --stacktrace --no-daemon
+
+          ./gradlew clean \
+            --stacktrace \
+            --no-daemon
 
       - name: Build Debug APK
         shell: bash
@@ -75,7 +150,10 @@ jobs:
           set -euo pipefail
 
           echo "Building Debug APK..."
-          ./gradlew assembleDebug --stacktrace --no-daemon
+
+          ./gradlew assembleDebug \
+            --stacktrace \
+            --no-daemon
 
       - name: Build Release APK
         shell: bash
@@ -83,7 +161,10 @@ jobs:
           set -euo pipefail
 
           echo "Building Release APK..."
-          ./gradlew assembleRelease --stacktrace --no-daemon
+
+          ./gradlew assembleRelease \
+            --stacktrace \
+            --no-daemon
 
       - name: Verify APK files
         shell: bash
@@ -92,32 +173,45 @@ jobs:
 
           echo "Verifying generated APK files..."
 
-          DEBUG_APK=$(find app/build/outputs/apk/debug \
+          DEBUG_DIR="app/build/outputs/apk/debug"
+          RELEASE_DIR="app/build/outputs/apk/release"
+
+          test -d "$DEBUG_DIR"
+          test -d "$RELEASE_DIR"
+
+          DEBUG_APK=$(find "$DEBUG_DIR" \
             -type f \
             -name "*.apk" \
             | head -n 1)
 
-          RELEASE_APK=$(find app/build/outputs/apk/release \
+          RELEASE_APK=$(find "$RELEASE_DIR" \
             -type f \
             -name "*.apk" \
             | head -n 1)
 
           if [ -z "$DEBUG_APK" ]; then
             echo "ERROR: Debug APK was not generated."
+            find app/build/outputs -type f | sort || true
             exit 1
           fi
 
           if [ -z "$RELEASE_APK" ]; then
             echo "ERROR: Release APK was not generated."
+            find app/build/outputs -type f | sort || true
             exit 1
           fi
 
+          echo ""
           echo "Debug APK:"
+          ls -lh "$DEBUG_APK"
           echo "$DEBUG_APK"
 
+          echo ""
           echo "Release APK:"
+          ls -lh "$RELEASE_APK"
           echo "$RELEASE_APK"
 
+          echo ""
           echo "APK verification: OK"
 
       - name: Generate SHA-256
@@ -139,12 +233,20 @@ jobs:
             -exec sha256sum {} \; \
             > build-artifacts/release-sha256.txt
 
-          echo "SHA-256 files generated."
+          echo "Debug SHA-256:"
+          cat build-artifacts/debug-sha256.txt
+
+          echo ""
+          echo "Release SHA-256:"
+          cat build-artifacts/release-sha256.txt
 
       - name: Collect APK artifacts
         shell: bash
         run: |
           set -euo pipefail
+
+          rm -rf build-artifacts/debug
+          rm -rf build-artifacts/release
 
           mkdir -p build-artifacts/debug
           mkdir -p build-artifacts/release
@@ -155,7 +257,12 @@ jobs:
           cp app/build/outputs/apk/release/*.apk \
             build-artifacts/release/
 
-          echo "APK artifacts collected."
+          echo "Collected Debug APK:"
+          ls -lh build-artifacts/debug/
+
+          echo ""
+          echo "Collected Release APK:"
+          ls -lh build-artifacts/release/
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
